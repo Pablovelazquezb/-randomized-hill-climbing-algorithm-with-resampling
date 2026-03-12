@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { f_Frog, type StepData } from '../utils/rhcr2';
 
 interface VisualizerProps {
@@ -14,21 +14,16 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
   const DOMAIN_MAX = 512;
   const DOMAIN_RANGE = DOMAIN_MAX - DOMAIN_MIN;
 
-  // Render the background heatmap once
-  useEffect(() => {
-    if (!canvasRef.current) return;
-    const canvas = canvasRef.current;
-    
-    // Create an offscreen canvas for the background to avoid re-rendering f_Frog
+  const generateBackground = useCallback((canvas: HTMLCanvasElement) => {
     if (!bgCanvasRef.current) {
       bgCanvasRef.current = document.createElement('canvas');
       bgCanvasRef.current.width = canvas.width;
       bgCanvasRef.current.height = canvas.height;
       
-      const ctx = bgCanvasRef.current.getContext('2d');
+      const ctx = bgCanvasRef.current.getContext('2d', { alpha: false });
       if (ctx) {
         // Render a low-res heat map to save performance
-        const resolution = 4; // px per block
+        const resolution = 6; // px per block (increased to save computation)
         for (let px = 0; px < canvas.width; px += resolution) {
           for (let py = 0; py < canvas.height; py += resolution) {
             // Map pixel to domain
@@ -37,26 +32,59 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
             
             const val = f_Frog(x, y);
             
-            // Map value to color based on typical f_Frog range (-1000 to 1000 approximately)
-            // Normalized value 0-1
             const normalized = Math.max(0, Math.min(1, (val + 1000) / 2000));
-            
-            // Create a gradient from lowest to highest
             const hue = 240 - (normalized * 240); // Blue to Red
-            ctx.fillStyle = `hsl(${hue}, 70%, 20%)`; // Darker, rich colors
+            ctx.fillStyle = `hsl(${hue}, 70%, 15%)`; 
             ctx.fillRect(px, py, resolution, resolution);
           }
         }
       }
     }
+    return bgCanvasRef.current;
   }, []);
 
-  // Render updates
+  // Handle resize matching
   useEffect(() => {
-    if (!canvasRef.current || !bgCanvasRef.current) return;
+    let resizeTimer: number;
+    
+    const handleResize = () => {
+      // Debounce resize to avoid freezing
+      clearTimeout(resizeTimer);
+      resizeTimer = window.setTimeout(() => {
+        if (canvasRef.current) {
+          const parent = canvasRef.current.parentElement;
+          if (parent) {
+            canvasRef.current.width = parent.clientWidth;
+            canvasRef.current.height = parent.clientHeight;
+            // Force background regeneration on resize
+            bgCanvasRef.current = null;
+            generateBackground(canvasRef.current);
+            // Ignore foreground render here, it's queued in the other effect
+          }
+        }
+      }, 100);
+    };
+    
+    handleResize(); // Initial setup
+    window.addEventListener('resize', handleResize);
+    return () => {
+      clearTimeout(resizeTimer);
+      window.removeEventListener('resize', handleResize);
+    };
+  }, [generateBackground]);
+
+  const renderForeground = useCallback(() => {
+    if (!canvasRef.current) return;
     const canvas = canvasRef.current;
-    const ctx = canvas.getContext('2d');
+    
+    const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
+    
+    // Ensure bg exists
+    const bg = bgCanvasRef.current || generateBackground(canvas);
+
+    // Disable smoothing for speed
+    ctx.imageSmoothingEnabled = false;
 
     // Helper to map domain coordinates to screen pixels
     const toScreen = (x: number, y: number) => {
@@ -65,9 +93,8 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
       return { px, py };
     };
 
-    // Clear and draw background
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(bgCanvasRef.current, 0, 0);
+    // Draw background (overwriting everything)
+    ctx.drawImage(bg, 0, 0);
 
     // Draw grid lines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
@@ -81,72 +108,56 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
 
     if (!stepData) return;
 
+    // Limit neighbors drawn if there are thousands
+    const displayNeighbors = stepData.neighbors.length > 500 
+        ? stepData.neighbors.filter((_, i) => i % Math.ceil(stepData.neighbors.length / 500) === 0)
+        : stepData.neighbors;
+
     // Draw Neighbors
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.4)';
-    for (const neighbor of stepData.neighbors) {
+    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+    ctx.beginPath();
+    for (const neighbor of displayNeighbors) {
       const { px, py } = toScreen(neighbor.x, neighbor.y);
-      ctx.beginPath();
-      ctx.arc(px, py, 1.5, 0, 2 * Math.PI);
-      ctx.fill();
+      // Use rects instead of arcs for speed
+      ctx.rect(px - 1, py - 1, 2, 2);
     }
+    ctx.fill();
 
     // Draw best neighbor if found
     if (stepData.bestNeighbor) {
       const best = toScreen(stepData.bestNeighbor.x, stepData.bestNeighbor.y);
-      
-      // Line to best neighbor
       const current = toScreen(stepData.currentPoint.x, stepData.currentPoint.y);
-      ctx.strokeStyle = '#5EEAD4'; // Accent color
+      
+      ctx.strokeStyle = '#5EEAD4'; 
       ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]); // Dashed line for intent
+      ctx.setLineDash([4, 4]); 
       ctx.beginPath();
       ctx.moveTo(current.px, current.py);
       ctx.lineTo(best.px, best.py);
       ctx.stroke();
-      ctx.setLineDash([]); // Reset
+      ctx.setLineDash([]); 
 
-      // Best neighbor dot
       ctx.fillStyle = '#C7D2FE'; 
       ctx.beginPath();
-      ctx.arc(best.px, best.py, 4, 0, 2 * Math.PI);
+      ctx.rect(best.px - 3, best.py - 3, 6, 6);
       ctx.fill();
     }
 
     // Draw Current Point
     const current = toScreen(stepData.currentPoint.x, stepData.currentPoint.y);
-    ctx.fillStyle = '#5EEAD4'; // Accent color
-    ctx.shadowColor = '#5EEAD4';
-    ctx.shadowBlur = 10;
+    ctx.fillStyle = '#5EEAD4';
     ctx.beginPath();
-    ctx.arc(current.px, current.py, 6, 0, 2 * Math.PI);
+    ctx.arc(current.px, current.py, 5, 0, 2 * Math.PI);
     ctx.fill();
-    ctx.shadowBlur = 0; // Reset
 
-    // Draw Coordinates label
-    ctx.fillStyle = '#FFFFFF';
-    ctx.font = '12px Inter';
-    ctx.fillText(`(${stepData.currentPoint.x.toFixed(1)}, ${stepData.currentPoint.y.toFixed(1)})`, current.px + 10, current.py - 10);
+  }, [stepData, DOMAIN_MAX, DOMAIN_MIN, DOMAIN_RANGE, generateBackground]);
 
-  }, [stepData]);
-
-  // Handle resize matching
+  // Render updates
   useEffect(() => {
-    const handleResize = () => {
-      if (canvasRef.current) {
-        const parent = canvasRef.current.parentElement;
-        if (parent) {
-          canvasRef.current.width = parent.clientWidth;
-          canvasRef.current.height = parent.clientHeight;
-          // Force background regeneration on resize
-          bgCanvasRef.current = null;
-        }
-      }
-    };
-    
-    handleResize();
-    window.addEventListener('resize', handleResize);
-    return () => window.removeEventListener('resize', handleResize);
-  }, []);
+    // Wrap in requestAnimationFrame for smooth non-blocking execution
+    const animationId = requestAnimationFrame(renderForeground);
+    return () => cancelAnimationFrame(animationId);
+  }, [renderForeground]);
 
   return (
     <div className="canvas-wrapper glass-panel">

@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback } from 'react';
 import { Settings2, Play, Square, FastForward, RotateCcw } from 'lucide-react';
 import { RHCR2_Generator, type StepData } from './utils/rhcr2';
 import { Visualizer } from './components/Visualizer';
@@ -12,60 +12,71 @@ function App() {
   const [spY, setSpY] = useState(-400);
 
   // Execution state
-  const [generator, setGenerator] = useState<Generator<StepData, StepData, void> | null>(null);
+  const generatorRef = useRef<Generator<StepData, StepData, void> | null>(null);
   const [stepData, setStepData] = useState<StepData | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [speedMs, setSpeedMs] = useState(500); // Animation delay
+  const [speedMs, setSpeedMs] = useState(100);
 
   const intervalRef = useRef<number | null>(null);
 
   // Initialize algorithmic generator
-  const initializeRun = () => {
+  const initializeRun = useCallback(() => {
     const gen = RHCR2_Generator(spX, spY, p, z, seed);
-    setGenerator(gen);
+    generatorRef.current = gen;
     
     // Get first step
     const firstState = gen.next().value;
     if (firstState) setStepData(firstState);
     setIsPlaying(false);
-  };
+  }, [spX, spY, p, z, seed]);
 
-  // Run automatically when playing
-  useEffect(() => {
-    if (isPlaying && generator) {
-      intervalRef.current = window.setInterval(() => {
-        handleStep();
-      }, speedMs);
-    } else if (intervalRef.current) {
-      clearInterval(intervalRef.current);
-    }
-
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isPlaying, generator, speedMs]);
-
-  const handleStep = () => {
-    if (!generator) return;
-    const nextState = generator.next();
+  const handleStep = useCallback((forcePause = false) => {
+    if (!generatorRef.current) return;
+    
+    const gen = generatorRef.current;
+    const nextState = gen.next();
+    
     if (nextState.value) {
       setStepData(nextState.value);
       if (nextState.value.isFinished) {
         setIsPlaying(false);
       }
     }
-  };
+    
+    if (forcePause) {
+      setIsPlaying(false);
+    }
+  }, []);
+
+  // Run automatically when playing
+  useEffect(() => {
+    if (isPlaying && generatorRef.current) {
+      intervalRef.current = window.setInterval(() => {
+        handleStep();
+      }, speedMs);
+    } else if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [isPlaying, speedMs, handleStep]);
 
   const handlePlayPause = () => {
-    if (!generator) {
+    if (!generatorRef.current) {
       initializeRun();
     }
-    setIsPlaying(!isPlaying);
+    setIsPlaying(prev => !prev);
   };
 
   const handleReset = () => {
     setIsPlaying(false);
-    setGenerator(null);
+    generatorRef.current = null;
     setStepData(null);
   };
 
@@ -140,12 +151,14 @@ function App() {
           <select 
             className="input-field" 
             value={speedMs} 
-            onChange={e => setSpeedMs(Number(e.target.value))}
+            onChange={e => {
+              setSpeedMs(Number(e.target.value));
+            }}
           >
             <option value={1000}>Slow (1000ms)</option>
             <option value={500}>Normal (500ms)</option>
             <option value={100}>Fast (100ms)</option>
-            <option value={10}>Max Speed (10ms)</option>
+            <option value={16}>Max Speed (16ms / 60fps)</option>
           </select>
         </div>
 
@@ -163,7 +176,10 @@ function App() {
             <button 
               className="btn" 
               style={{flex: 1}}
-              onClick={handleStep}
+              onClick={() => {
+                if (!generatorRef.current) initializeRun();
+                else handleStep(true);
+              }}
               disabled={isPlaying || stepData?.isFinished}
             >
               <FastForward size={18} />
@@ -199,6 +215,12 @@ function App() {
           <div className="stat-row" style={{marginTop: '0.5rem', paddingTop: '0.5rem', borderTop: '1px solid var(--panel-border)'}}>
             <span className="stat-label">Current Min Value</span>
             <span className="stat-value">{stepData?.currentVal?.toFixed(4) ?? '---'}</span>
+          </div>
+          <div className="stat-row">
+            <span className="stat-label">Best Coords</span>
+            <span className="stat-value">
+              {stepData ? `(${stepData.currentPoint.x.toFixed(1)}, ${stepData.currentPoint.y.toFixed(1)})` : '---'}
+            </span>
           </div>
         </div>
       </div>
