@@ -68,6 +68,12 @@ function App() {
   }, [isPlaying, speedMs, handleStep]);
 
   const handlePlayPause = () => {
+    if (stepData?.isFinished) {
+      initializeRun();
+      setIsPlaying(true);
+      return;
+    }
+
     if (!generatorRef.current) {
       initializeRun();
     }
@@ -76,6 +82,10 @@ function App() {
 
   const handleReset = () => {
     setIsPlaying(false);
+    if (intervalRef.current) {
+      clearInterval(intervalRef.current);
+      intervalRef.current = null;
+    }
     generatorRef.current = null;
     setStepData(null);
   };
