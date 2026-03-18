@@ -27,6 +27,7 @@ export type StepData = {
     iteration: number;
     fCalls: number;
     isFinished: boolean;
+    path: Point[];
 };
 
 export function* RHCR2_Generator(
@@ -42,6 +43,7 @@ export function* RHCR2_Generator(
     let currentVal = f_Frog(currentPoint.x, currentPoint.y);
     let fCalls = 1;
     let iteration = 0;
+    const path: Point[] = [{ x: startX, y: startY }];
     
     const max_iterations = 1000; // Capped for visualizer to prevent infinite loops
 
@@ -81,12 +83,14 @@ export function* RHCR2_Generator(
             bestNeighborVal,
             iteration,
             fCalls,
-            isFinished: bestNeighbor === null
+            isFinished: bestNeighbor === null,
+            path: [...path]
         };
 
         if (bestNeighbor !== null) {
             currentPoint = bestNeighbor;
             currentVal = bestNeighborVal;
+            path.push({ ...currentPoint });
         } else {
             break;
         }
@@ -100,6 +104,7 @@ export function* RHCR2_Generator(
         bestNeighborVal: currentVal,
         iteration,
         fCalls,
-        isFinished: true // Mark as finished here as well
+        isFinished: true, // Mark as finished here as well
+        path: [...path]
     };
 }

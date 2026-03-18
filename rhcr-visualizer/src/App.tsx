@@ -21,7 +21,20 @@ function App() {
 
   // Initialize algorithmic generator
   const initializeRun = useCallback(() => {
-    const gen = RHCR2_Generator(spX, spY, p, z, seed);
+    const safeP = Math.max(1, p || 1);
+    const safeZ = Math.max(0.1, z || 1);
+    const safeSpX = Number.isNaN(spX) ? 0 : spX;
+    const safeSpY = Number.isNaN(spY) ? 0 : spY;
+    const safeSeed = Number.isNaN(seed) ? 42 : seed;
+
+    // Update UI with sanitized values immediately
+    if (p !== safeP) setP(safeP);
+    if (z !== safeZ) setZ(safeZ);
+    if (spX !== safeSpX) setSpX(safeSpX);
+    if (spY !== safeSpY) setSpY(safeSpY);
+    if (seed !== safeSeed) setSeed(safeSeed);
+
+    const gen = RHCR2_Generator(safeSpX, safeSpY, safeP, safeZ, safeSeed);
     generatorRef.current = gen;
     
     // Get first step

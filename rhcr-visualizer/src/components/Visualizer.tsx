@@ -14,21 +14,22 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
   const DOMAIN_MAX = 512;
   const DOMAIN_RANGE = DOMAIN_MAX - DOMAIN_MIN;
 
-  const generateBackground = useCallback((canvas: HTMLCanvasElement) => {
+  const generateBackground = useCallback((width: number, height: number, dpr: number) => {
     if (!bgCanvasRef.current) {
       bgCanvasRef.current = document.createElement('canvas');
-      bgCanvasRef.current.width = canvas.width;
-      bgCanvasRef.current.height = canvas.height;
+      bgCanvasRef.current.width = width * dpr;
+      bgCanvasRef.current.height = height * dpr;
       
       const ctx = bgCanvasRef.current.getContext('2d', { alpha: false });
       if (ctx) {
+        ctx.scale(dpr, dpr);
         // Render a low-res heat map to save performance
-        const resolution = 6; // px per block (increased to save computation)
-        for (let px = 0; px < canvas.width; px += resolution) {
-          for (let py = 0; py < canvas.height; py += resolution) {
-            // Map pixel to domain
-            const x = DOMAIN_MIN + (px / canvas.width) * DOMAIN_RANGE;
-            const y = DOMAIN_MIN + ((canvas.height - py) / canvas.height) * DOMAIN_RANGE; // Invert Y
+        const resolution = 6; // logical px per block
+        for (let px = 0; px < width; px += resolution) {
+          for (let py = 0; py < height; py += resolution) {
+            // Map logical pixel to domain
+            const x = DOMAIN_MIN + (px / width) * DOMAIN_RANGE;
+            const y = DOMAIN_MIN + ((height - py) / height) * DOMAIN_RANGE; // Invert Y
             
             const val = f_Frog(x, y);
             
@@ -54,12 +55,18 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
         if (canvasRef.current) {
           const parent = canvasRef.current.parentElement;
           if (parent) {
-            canvasRef.current.width = parent.clientWidth;
-            canvasRef.current.height = parent.clientHeight;
+            const dpr = window.devicePixelRatio || 1;
+            const w = parent.clientWidth;
+            const h = parent.clientHeight;
+            
+            canvasRef.current.width = w * dpr;
+            canvasRef.current.height = h * dpr;
+            canvasRef.current.style.width = `${w}px`;
+            canvasRef.current.style.height = `${h}px`;
+            
             // Force background regeneration on resize
             bgCanvasRef.current = null;
-            generateBackground(canvasRef.current);
-            // Ignore foreground render here, it's queued in the other effect
+            generateBackground(w, h, dpr);
           }
         }
       }, 100);
@@ -77,79 +84,124 @@ export const Visualizer: React.FC<VisualizerProps> = ({ stepData }) => {
     if (!canvasRef.current) return;
     const canvas = canvasRef.current;
     
+    const dpr = window.devicePixelRatio || 1;
+    const width = canvas.width / dpr;
+    const height = canvas.height / dpr;
+
     const ctx = canvas.getContext('2d', { alpha: false });
     if (!ctx) return;
     
     // Ensure bg exists
-    const bg = bgCanvasRef.current || generateBackground(canvas);
+    const bg = bgCanvasRef.current || generateBackground(width, height, dpr);
 
-    // Disable smoothing for speed
+    ctx.save();
+    // Disable smoothing for speed on the background draw
     ctx.imageSmoothingEnabled = false;
 
-    // Helper to map domain coordinates to screen pixels
-    const toScreen = (x: number, y: number) => {
-      const px = ((x - DOMAIN_MIN) / DOMAIN_RANGE) * canvas.width;
-      const py = canvas.height - (((y - DOMAIN_MIN) / DOMAIN_RANGE) * canvas.height);
-      return { px, py };
-    };
-
     // Draw background (overwriting everything)
-    ctx.drawImage(bg, 0, 0);
+    // The bg canvas is already scaled physically, drawImage draws from logical to physical automatically if scaled correctly
+    ctx.scale(dpr, dpr);
+    // Draw background using logical width/height (because we scaled the context)
+    // Wait, drawImage of another canvas that is width*dpr pixels. We should draw it at physical size or logical size
+    // We already scaled the ctx, so if we drawImage at logical width/height it will stretch the physical bg. 
+    // We should draw the bgCanvas at exactly logical width/height and let context scale it to physical.
+    ctx.drawImage(bg, 0, 0, width, height);
 
     // Draw grid lines
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.05)';
     ctx.lineWidth = 1;
     ctx.beginPath();
-    ctx.moveTo(canvas.width / 2, 0);
-    ctx.lineTo(canvas.width / 2, canvas.height);
-    ctx.moveTo(0, canvas.height / 2);
-    ctx.lineTo(canvas.width, canvas.height / 2);
+    ctx.moveTo(width / 2, 0);
+    ctx.lineTo(width / 2, height);
+    ctx.moveTo(0, height / 2);
+    ctx.lineTo(width, height / 2);
     ctx.stroke();
 
-    if (!stepData) return;
+    // Helper to map domain coordinates to logical screen pixels
+    const toLogical = (x: number, y: number) => {
+      const px = ((x - DOMAIN_MIN) / DOMAIN_RANGE) * width;
+      const py = height - (((y - DOMAIN_MIN) / DOMAIN_RANGE) * height);
+      return { px, py };
+    };
 
-    // Limit neighbors drawn if there are thousands
-    const displayNeighbors = stepData.neighbors.length > 500 
-        ? stepData.neighbors.filter((_, i) => i % Math.ceil(stepData.neighbors.length / 500) === 0)
-        : stepData.neighbors;
+    if (stepData) {
+        // Draw the Historical Path Line
+        if (stepData.path && stepData.path.length > 0) {
+            ctx.beginPath();
+            ctx.strokeStyle = 'rgba(255, 255, 255, 0.4)';
+            ctx.lineWidth = 2;
+            
+            const firstLogical = toLogical(stepData.path[0].x, stepData.path[0].y);
+            ctx.moveTo(firstLogical.px, firstLogical.py);
+            
+            for (let i = 1; i < stepData.path.length; i++) {
+                const lp = toLogical(stepData.path[i].x, stepData.path[i].y);
+                ctx.lineTo(lp.px, lp.py);
+            }
+            
+            // Connect to current point if not already there
+            const curLp = toLogical(stepData.currentPoint.x, stepData.currentPoint.y);
+            ctx.lineTo(curLp.px, curLp.py);
+            
+            ctx.stroke();
+            
+            // Add a glowing halo effect to the line
+            ctx.shadowColor = 'rgba(255, 255, 255, 0.5)';
+            ctx.shadowBlur = 4;
+            ctx.stroke();
+            ctx.shadowBlur = 0;
+        }
 
-    // Draw Neighbors
-    ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
-    ctx.beginPath();
-    for (const neighbor of displayNeighbors) {
-      const { px, py } = toScreen(neighbor.x, neighbor.y);
-      // Use rects instead of arcs for speed
-      ctx.rect(px - 1, py - 1, 2, 2);
+        // Limit neighbors drawn if there are thousands
+        const displayNeighbors = stepData.neighbors.length > 500 
+            ? stepData.neighbors.filter((_, i) => i % Math.ceil(stepData.neighbors.length / 500) === 0)
+            : stepData.neighbors;
+
+        // Draw Neighbors
+        ctx.fillStyle = 'rgba(255, 255, 255, 0.3)';
+        ctx.beginPath();
+        for (const neighbor of displayNeighbors) {
+          const { px, py } = toLogical(neighbor.x, neighbor.y);
+          ctx.rect(px - 1, py - 1, 2, 2);
+        }
+        ctx.fill();
+
+        // Draw best neighbor if found
+        if (stepData.bestNeighbor) {
+          const best = toLogical(stepData.bestNeighbor.x, stepData.bestNeighbor.y);
+          const current = toLogical(stepData.currentPoint.x, stepData.currentPoint.y);
+          
+          ctx.strokeStyle = '#5EEAD4'; 
+          ctx.lineWidth = 2;
+          ctx.setLineDash([4, 4]); 
+          ctx.beginPath();
+          ctx.moveTo(current.px, current.py);
+          ctx.lineTo(best.px, best.py);
+          ctx.stroke();
+          ctx.setLineDash([]); 
+
+          ctx.fillStyle = '#C7D2FE'; 
+          ctx.beginPath();
+          ctx.rect(best.px - 3, best.py - 3, 6, 6);
+          ctx.fill();
+        }
+
+        // Draw Current Point
+        const current = toLogical(stepData.currentPoint.x, stepData.currentPoint.y);
+        ctx.fillStyle = '#5EEAD4';
+        
+        // Slightly larger pulse radius if playing? We can just keep it 5
+        ctx.beginPath();
+        ctx.arc(current.px, current.py, 5, 0, 2 * Math.PI);
+        ctx.fill();
+        
+        ctx.shadowColor = '#5EEAD4';
+        ctx.shadowBlur = 10;
+        ctx.fill();
+        ctx.shadowBlur = 0;
     }
-    ctx.fill();
 
-    // Draw best neighbor if found
-    if (stepData.bestNeighbor) {
-      const best = toScreen(stepData.bestNeighbor.x, stepData.bestNeighbor.y);
-      const current = toScreen(stepData.currentPoint.x, stepData.currentPoint.y);
-      
-      ctx.strokeStyle = '#5EEAD4'; 
-      ctx.lineWidth = 2;
-      ctx.setLineDash([4, 4]); 
-      ctx.beginPath();
-      ctx.moveTo(current.px, current.py);
-      ctx.lineTo(best.px, best.py);
-      ctx.stroke();
-      ctx.setLineDash([]); 
-
-      ctx.fillStyle = '#C7D2FE'; 
-      ctx.beginPath();
-      ctx.rect(best.px - 3, best.py - 3, 6, 6);
-      ctx.fill();
-    }
-
-    // Draw Current Point
-    const current = toScreen(stepData.currentPoint.x, stepData.currentPoint.y);
-    ctx.fillStyle = '#5EEAD4';
-    ctx.beginPath();
-    ctx.arc(current.px, current.py, 5, 0, 2 * Math.PI);
-    ctx.fill();
-
+    ctx.restore();
   }, [stepData, DOMAIN_MAX, DOMAIN_MIN, DOMAIN_RANGE, generateBackground]);
 
   // Render updates
